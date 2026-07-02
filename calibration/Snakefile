@@ -1,0 +1,340 @@
+import os
+import pandas as pd
+from Bio import SeqIO
+
+configfile: "config.yaml"
+
+GENES = config["genes"]
+GENES_DIR = config["genes_dir"]
+CLUSTER_DIR = config["clusters_dir"]
+SCRIPTS_DIR = config["scripts_dir"]
+MODEL_DIR = config["model_dir"]
+
+# 1. Función para los HMMs
+def get_all_outputs(wildcards):
+    g = wildcards.gene
+    # Obliga a Snakemake a ejecutar el checkpoint antes de seguir
+    checkpoint_output = checkpoints.split_clusters.get(gene=g).output.out_dir
+    
+    # Ahora que el checkpoint ha terminado, lista
+    final_list = []
+    # Buscamos los prefijos de las rondas (ej: round_0, round_1...)
+    rids = [f.replace("_train.fasta", "") for f in os.listdir(checkpoint_output) if f.endswith("_train.fasta")]
+    
+    for rid in rids:
+        final_list.append(os.path.join(config["calibration_clean_dir"], g, f"{rid}_pos_parsed.tsv"))
+        final_list.append(os.path.join(config["calibration_clean_dir"], g, f"{rid}_neg_parsed.tsv"))
+    
+    return final_list
+
+rule all:
+    input:
+        os.path.join(config["calibration_results_dir"], "LOOCV_summary_all_genes.csv"),
+        expand(os.path.join(config["calibration_results_dir"], "{gene}_curves.png"), gene=GENES)
+
+# Checkpoint para dividir los clusters
+checkpoint split_clusters:
+    input:
+        tsv = os.path.join(CLUSTER_DIR, "{gene}_clustered_cluster.tsv"),
+        fasta = os.path.join(CLUSTER_DIR, "{gene}_clustered_all_seqs.fasta")
+    output:
+        out_dir = directory(os.path.join(MODEL_DIR, "{gene}_rounds")),
+        flag = os.path.join(MODEL_DIR, "{gene}_rounds", ".split_done")
+    run:
+        os.makedirs(output.out_dir, exist_ok=True)
+        
+        df = pd.read_csv(input.tsv, sep='\t', header=None, names=['rep', 'seq_id'])
+        
+        all_records = list(SeqIO.parse(input.fasta, "fasta"))
+        
+        clusters = df.groupby('rep')['seq_id'].apply(set).to_dict()
+        cluster_names = list(clusters.keys())
+
+        for i, target_cluster_rep in enumerate(cluster_names):
+            round_id = f"round_{i}"
+            
+            current_cluster_ids = clusters[target_cluster_rep]
+            
+            test_seqs = []
+            train_seqs = []
+            
+            for record in all_records:
+                if record.id in current_cluster_ids:
+                    test_seqs.append(record)
+                else:
+                    train_seqs.append(record)
+            
+            if test_seqs:
+                SeqIO.write(test_seqs, os.path.join(output.out_dir, f"{round_id}_test.fasta"), "fasta")
+            if train_seqs:
+                SeqIO.write(train_seqs, os.path.join(output.out_dir, f"{round_id}_train.fasta"), "fasta")
+            
+        with open(output.flag, "w") as f:
+            f.write("done")
+
+# 1) Clustering
+rule clustering:
+    input:
+        fasta = os.path.join(GENES_DIR, "{gene}.faa"),
+        script = os.path.join(SCRIPTS_DIR, "clustering.sh")
+    output:
+        tsv = os.path.join(CLUSTER_DIR, "{gene}_clustered_cluster.tsv"),
+        rep = os.path.join(CLUSTER_DIR, "{gene}_clustered_rep_seq.fasta"),
+        all_seqs = os.path.join(CLUSTER_DIR, "{gene}_clustered_all_seqs.fasta")
+    shell:
+        "bash {input.script} -i {GENES_DIR} -o {CLUSTER_DIR}"    
+
+# --- Función para recolectar todas las rondas creadas por el checkpoint ---
+def get_all_rounds(wildcards):
+    checkpoint_output = checkpoints.split_clusters.get(**wildcards).output.out_dir
+    return expand(os.path.join(MODEL_DIR, wildcards.gene, "rounds", "{round_id}.hmm"),
+                  gene=wildcards.gene,
+                  round_id=[f.replace("_train.fasta", "") for f in os.listdir(checkpoint_output) if f.endswith("_train.fasta")])
+
+# --- Regla para la DB de Positivos (Todos los gadC) ---
+rule create_pos_tm_db:
+    input:
+        fasta = os.path.join(GENES_DIR, "gadC.faa")
+    output:
+        tsv = "gold/gadC_tm_db.tsv"
+    shell:
+        "bash scripts/tmhmm_deeper_loocv.sh -f {input.fasta} -o {output.tsv}"
+
+# --- 2) Alineamiento (MAFFT) ---
+rule align_round:
+    input:
+        fasta = os.path.join(MODEL_DIR, "{gene}_rounds", "{round_id}_train.fasta")
+    output:
+        afa = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "{round_id}_align.afa"),
+        aln = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "{round_id}_align.aln")
+    threads: 2
+    shell:
+        """
+        python3 -c "
+from Bio import SeqIO
+import sys
+
+valid_records = []
+for record in SeqIO.parse('{input.fasta}', 'fasta'):
+    clean_seq = str(record.seq).replace('-', '').strip()
+    if len(clean_seq) > 0:
+        valid_records.append(record)
+
+if valid_records:
+    SeqIO.write(valid_records, '{input.fasta}.clean', 'fasta')
+else:
+    print('ERROR: No hay secuencias válidas en {input.fasta}')
+    sys.exit(1)
+        "
+
+        mafft --thread {threads} --auto {input.fasta}.clean > {output.afa}
+        
+        cp {output.afa} {output.aln}
+        rm {input.fasta}.clean
+        """
+
+# --- 2.2) Trimming (Trimal) ---
+rule trimm_round:
+    input:
+        afa = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "{round_id}_align.afa")
+    output:
+        afa_tr = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "trimmed", "{round_id}_trimmalign.afa"),
+        html = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "trimmed", "{round_id}_report.html")
+    shell:
+        """
+        mkdir -p $(dirname {output.afa_tr})
+        trimal -in {input.afa} -gappyout -out {output.afa_tr} -htmlout {output.html}
+        """
+
+# --- 3) Build HMM (HMMER) ---
+rule build_hmm_round:
+    input:
+        afa_tr = os.path.join(CLUSTER_DIR, "{gene}", "alignments", "trimmed", "{round_id}_trimmalign.afa")
+    output:
+        hmm = os.path.join(MODEL_DIR, "{gene}_rounds", "{round_id}.hmm")
+    threads: 4
+    shell:
+        "hmmbuild --amino --cpu {threads} {output.hmm} {input.afa_tr}"
+
+# 4.1) Búsqueda contra el cluster de TEST (Positivo)
+rule hmmsearch_pos:
+    input:
+        hmm = os.path.join(MODEL_DIR, "{gene}_rounds", "{round_id}.hmm"),
+        test_pos = os.path.join(MODEL_DIR, "{gene}_rounds", "{round_id}_test.fasta")
+    output:
+        domtbl = os.path.join(config["calibration_raw_dir"], "{gene}", "{round_id}_pos.domtbl")
+    threads: 2
+    shell:
+        "hmmsearch --domtblout {output.domtbl} --cpu {threads} {input.hmm} {input.test_pos}"
+
+# 4.2) Búsqueda contra los NEGATIVOS 
+rule hmmsearch_neg:
+    input:
+        hmm = os.path.join(MODEL_DIR, "{gene}_rounds", "{round_id}.hmm"),
+        negatives = config["gold_neg_fasta"]
+    output:
+        domtbl = os.path.join(config["calibration_raw_dir"], "{gene}", "{round_id}_neg.domtbl")
+    threads: 4
+    shell:
+        """
+        hmmsearch -E 100 --domE 100 \
+                  --domtblout {output.domtbl} \
+                  --cpu {threads} \
+                  {input.hmm} {input.negatives}
+        """
+
+def get_neg_tsv_inputs(wildcards):
+    checkpoint_output = checkpoints.split_clusters.get(gene="gadC").output.out_dir
+    # Obtenemos los IDs de las rondas creadas
+    rids = [f.replace("_train.fasta", "") for f in os.listdir(checkpoint_output) if f.endswith("_train.fasta")]
+    # Devolvemos la lista de archivos simple.tsv de negativos
+    return expand(os.path.join(config["calibration_clean_dir"], "gadC", "{rid}_neg_simple.tsv"), rid=rids)
+
+rule extract_neg_hits_fasta:
+    input:
+        tsvs = get_neg_tsv_inputs,
+        gold_neg = config["gold_neg_fasta"]
+    output:
+        fasta = "gold/negatives_hits_only.faa"
+    run:
+        import pandas as pd
+        from Bio import SeqIO
+        
+        # 1. Extraer IDs únicos de todos los TSVs de negativos
+        unique_ids = set()
+        for f in input.tsvs:
+            df = pd.read_csv(f, sep="\t")
+            if not df.empty:
+                unique_ids.update(df.iloc[:, 0].astype(str).tolist())
+        
+        # 2. Filtrar el FASTA gigante
+        with open(output.fasta, "w") as out_handle:
+            # Parseamos el gold_neg y solo guardamos si el ID está en nuestra lista de hits
+            for record in SeqIO.parse(input.gold_neg, "fasta"):
+                if record.id in unique_ids:
+                    SeqIO.write(record, out_handle, "fasta")
+
+rule create_neg_tm_db:
+    input:
+        fasta = "gold/negatives_hits_only.faa"
+    output:
+        tsv = "gold/negatives_tm_db.tsv"
+    shell:
+        "bash scripts/tmhmm_deeper_loocv.sh -f {input.fasta} -o {output.tsv}"
+
+# 4.2) Parse
+# --- REGLA 1: Parseo inicial (Crea el _simple.tsv) ---
+rule parse_round:
+    input:
+        tbl = os.path.join(config["calibration_raw_dir"], "{gene}", "{round_id}_{type}.domtbl")
+    output:
+        tsv = os.path.join(config["calibration_clean_dir"], "{gene}", "{round_id}_{type}_simple.tsv")
+    params:
+        script = os.path.join(SCRIPTS_DIR, "parser2.sh")
+    shell:
+        "bash {params.script} -i {input.tbl} -o {output.tsv}"
+
+# --- REGLA 2: Post-proceso (Crea el _parsed.tsv que espera la agregación) ---
+rule gadC_postprocess:
+    input:
+        tsv = os.path.join(config["calibration_clean_dir"], "{gene}", "{round_id}_{type}_simple.tsv"),
+        neg_db = "gold/negatives_tm_db.tsv",
+        pos_db = "gold/gadC_tm_db.tsv"
+    output:
+        tsv_parsed = os.path.join(config["calibration_clean_dir"], "{gene}", "{round_id}_{type}_parsed.tsv")
+    shell:
+        """
+        if [ "{wildcards.gene}" != "gadC" ]; then
+            awk 'BEGIN {{FS=OFS="\\t"}} NR==1 {{print $0, "seq_length", "n_tm"}} NR>1 {{print $0, 0, 0}}' {input.tsv} > {output.tsv_parsed}
+        else
+            if [ "{wildcards.type}" == "pos" ]; then DB={input.pos_db}; else DB={input.neg_db}; fi
+            
+            awk -F'\\t' 'NR==FNR {{len[$1]=$2; tm[$1]=$3; next}} 
+                FNR==1 {{print $0 "\\tseq_length\\tn_tm"; next}} 
+                {{
+                    id=$1;
+                    l = (id in len) ? len[id] : 0;
+                    t = (id in tm) ? tm[id] : 0;
+                    print $0 "\\t" l "\\t" t
+                }}' $DB {input.tsv} > {output.tsv_parsed}
+        fi
+        """
+
+
+# --- 6) Agregación Final de Métricas LOOCV ---
+rule aggregate_metrics:
+    input:
+        tsvs = get_all_outputs
+    output:
+        csv = os.path.join(config["calibration_results_dir"], "{gene}_final_metrics.csv"),
+        png = os.path.join(config["calibration_results_dir"], "{gene}_curves.png"),
+        details = os.path.join(config["calibration_results_dir"], "{gene}_detailed_metrics.tsv"),
+        diag_plot = os.path.join(config["calibration_results_dir"], "{gene}_threshold_diag.png")
+    params:
+        script = os.path.join(SCRIPTS_DIR, "aggregate_loocv.py")
+    shell:
+        """
+        python3 {params.script} \
+            --gene {wildcards.gene} \
+            --tsvs {input.tsvs} \
+            --output_csv {output.csv} \
+            --output_png {output.png} \
+            --output_details {output.details} \
+            --output_threshold_plot {output.diag_plot}
+        """
+
+rule global_summary:
+    input:
+        tsvs = expand(os.path.join(config["calibration_results_dir"], "{gene}_final_metrics.csv"), gene=GENES)
+    output:
+        summary = os.path.join(config["calibration_results_dir"], "LOOCV_summary_all_genes.csv")
+    run:
+        import pandas as pd
+        
+        df_list = []
+        for f in input.tsvs:
+            try:
+                temp_df = pd.read_csv(f)
+                if not temp_df.empty:
+                    df_list.append(temp_df)
+            except Exception as e:
+                print(f"Error al leer {f}: {e}")
+        
+        if df_list:
+            final_summary = pd.concat(df_list).reset_index(drop=True)
+            
+            final_summary.to_csv(output.summary, index=False, sep="\t")
+            
+            print("\n" + "="*100)
+            print("         RESUMEN GLOBAL DE CALIBRACIÓN LOOCV (NUEVA VERSIÓN)")
+            print("="*100)
+            
+            rename_dict = {
+                "gene": "Gene",
+                "TC": "TC_Final",
+                "PR_AUC": "AUC_PR",
+                "n_pos": "Pos_Finales",
+                "n_neg": "Neg_Finales"
+            }
+            display_df = final_summary.rename(columns=rename_dict)
+            
+            cols_to_show = ["Gene", "TC_Final", "AUC_PR", "Pos_Finales", "Neg_Finales"]
+            available_cols = [c for c in cols_to_show if c in display_df.columns]
+            
+            print(display_df[available_cols].to_string(index=False, justify='center'))
+            print("="*100)
+
+            # Verificación de Robustez
+            if "AUC_PR" in display_df.columns:
+                weak_models = display_df[display_df["AUC_PR"] < 0.90]["Gene"].tolist()
+                if weak_models:
+                    print(f"ATENCIÓN: Los modelos para {weak_models} tienen un AUC menor a 0.90.")
+                else:
+                    print("Todos los modelos tienen un AUC_PR robusto.")
+            
+            print(f"Archivo guardado en: {output.summary}")
+            print("="*100 + "\n")
+        else:
+            print("\n" + "!"*50)
+            print("ERROR: No se pudo recolectar ningún dato de los archivos de entrada.")
+            print("!"*50 + "\n")

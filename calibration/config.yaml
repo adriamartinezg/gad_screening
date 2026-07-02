@@ -1,0 +1,22 @@
+# ==== Genes a analizar ====
+genes:
+  - gadA
+  - gadB
+  - gadC
+
+# ==== Directorios principales ====
+genes_dir: "genes"                  # FASTA db originales de cada gen
+clusters_dir: "clusters"            # Directorio donde se guardan los clusters por gen
+model_dir: "model"                  # HMM generados por cluster
+calibration_raw_dir: "calibration/raw"      # Resultados hmmsearch
+calibration_clean_dir: "calibration/clean"  # TSV parseados + gadC filtrado
+calibration_results_dir: "calibration/results"  # PR/ROC y summary final
+gold_neg_dir: "gold/negatives"      # Secuencias negativas para evaluación
+gold_neg_fasta: "gold/negatives.faa"
+
+# ==== Scripts ====
+scripts_dir: "scripts"              # Carpeta que contiene cluster_mmseqs.sh, align.sh, parser.sh, tmhmm_deeper.sh, metrics_analysis_loocv.py
+
+
+
+
