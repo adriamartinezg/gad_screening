@@ -9,16 +9,12 @@ if [ ! -f "$CFMD_LIST" ]; then
      -O "$CFMD_LIST"
 fi
 
-# 1. Extraer ID, Categoría y STATUS desde tu screening de GAD
-# Asumiendo que $3 es ID, $5 es Categoría y $9 es System_Status
 awk -F'\t' '$9 == "COMPLETE" || $9 == "ABSENT" {print $3 "\t" $5 "\t" $9}' GAD_SYSTEM_MAG_LEVEL_RESULTS.tsv > mag_ids_all.tmp
 
 OUTPUT="results_cfmd/taxonomy/final_taxonomy_results_all.tsv"
 
-# 2. Cabecera EXACTA para que R no se pierda
 echo -e "MAG_id\tCategory\tSystem_Status\tSpecies\tKuperkingdom\tPhylum\tClass\tOrder\tFamily\tGenus\tCompleteness\tContamination" > "$OUTPUT"
 
-# 3. Bucle de asignación de taxonomía
 echo "Asignando taxonomía a los MAGs..."
 while read -r mag_id category status; do
     line=$(grep -w "$mag_id" "$CFMD_LIST")
@@ -37,7 +33,6 @@ while read -r mag_id category status; do
     fi
 done < mag_ids_all.tmp
 
-# Limpieza
 [ -f mag_ids_all.tmp ] && rm mag_ids_all.tmp
 
 echo "¡Proceso finalizado con éxito!"
