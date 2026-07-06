@@ -6,7 +6,7 @@ By combining profile Hidden Markov Models (pHMMs) with custom Trust Thresholds (
 
 ## Repository Structure
 
-```{plaintext}
+```{bash}
 ├── model/                      # Trained .hmm files for gadA, gadB, and gadC
 ├── markers/                    # Concatenated marker protein sequences (.faa) for phylogenetic alignment
 ├── thresholds.csv              # Calculated Trusted Cutoffs (TCs) for validation
