@@ -1,26 +1,20 @@
 #!/bin/bash
 
-# Nombre del archivo final (se guardará en la raíz tfm_app)
+
 OUTPUT="MGNIFY_FINAL_GAD.tsv"
 
-# 1. Escribir la cabecera
 echo -e "Genome_ID\tBiome\tStatus\tSpecies\tDomain\tPhylum\tClass\tOrder\tFamily\tGenus\tCompleteness\tContamination" > "$OUTPUT"
 
-# 2. Definir la raíz de los datos
 DATA_ROOT="results_mgnify_meta"
 
-# 3. Iterar por cada carpeta de bioma dentro de results_mgnify_meta
 for BIOME_PATH in "$DATA_ROOT"/*/; do
-    # Extraer solo el nombre de la carpeta (ej: barley-rhizosphere)
     BIOME_NAME=$(basename "$BIOME_PATH")
     
-    # Definir rutas exactas según tu estructura
     META_FILE="${BIOME_PATH}genomes-all_metadata.tsv"
     HITS_FILE="${BIOME_PATH}hits/summary/GAD_dataset_classification.tsv"
 
     echo "Procesando bioma: $BIOME_NAME..."
 
-    # Verificar que existen ambos archivos
     if [[ -f "$META_FILE" && -f "$HITS_FILE" ]]; then
         
         # 4. Unir con AWK
