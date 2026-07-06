@@ -3,7 +3,7 @@
 # Configuración
 BASE_URL="https://ftp.ebi.ac.uk/pub/databases/metagenomics/mgnify_genomes"
 BASE_DIR=$(pwd)
-MODELS="$BASE_DIR/model"           # Ruta completa a tu carpeta de modelos
+MODELS="$BASE_DIR/model"           # Ruta completa a carpeta de modelos
 TC_FILE="$BASE_DIR/thresholds.csv" # Ruta completa al CSV
 CLASSIFIER="$BASE_DIR/scripts/classifier.sh"
 RESULTS_BASE="$BASE_DIR/results_mgnify_meta"
