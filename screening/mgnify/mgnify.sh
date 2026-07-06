@@ -7,7 +7,6 @@ MODELS="$BASE_DIR/model"           # Ruta completa a tu carpeta de modelos
 TC_FILE="$BASE_DIR/thresholds.csv" # Ruta completa al CSV
 CLASSIFIER="$BASE_DIR/scripts/classifier.sh"
 RESULTS_BASE="$BASE_DIR/results_mgnify_meta"
-# Lista de biomas basada en tu entrada
 BIOMES=(
     "barley-rhizosphere" "chicken-gut" "cow-rumen" "honeybee-gut" 
     "human-gut" "human-oral" "human-skin" "human-vaginal" 
@@ -29,7 +28,6 @@ for BIOME in "${BIOMES[@]}"; do
     fi
     echo "[+] Detected version: $VERSION"
 
-    # 2. Crear carpetas y bajar metadata
     BIOME_DIR="$RESULTS_BASE/$BIOME"
     mkdir -p "$BIOME_DIR/faa_files"
     
@@ -37,9 +35,7 @@ for BIOME in "${BIOMES[@]}"; do
     echo "[+] Downloading metadata..."
     wget -N -P "$BIOME_DIR" "$METADATA_URL"
 
-    # 3. Navegar por el Species Catalogue
     CATALOGUE_URL="$BASE_URL/$BIOME/$VERSION/species_catalogue/"
-    # Obtener bloques MGYG (ej. MGYG0000000/)
     BLOCKS=$(curl -s "$CATALOGUE_URL" | grep -oE 'MGYG[0-9]+/' | uniq)
 
     for BLOCK in $BLOCKS; do
