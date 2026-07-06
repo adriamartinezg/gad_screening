@@ -6,6 +6,7 @@ By combining profile Hidden Markov Models (pHMMs) with custom Trust Thresholds (
 
 ## Repository Structure
 
+```{plaintext}
 ├── model/                      # Trained .hmm files for gadA, gadB, and gadC
 ├── markers/                    # Concatenated marker protein sequences (.faa) for phylogenetic alignment
 ├── thresholds.csv              # Calculated Trusted Cutoffs (TCs) for validation
@@ -41,6 +42,7 @@ By combining profile Hidden Markov Models (pHMMs) with custom Trust Thresholds (
     ├── mgnify_plots.R
     ├── cfmd_plots.R
     └── combined_plots.R        # Relative abundance, Fisher's Exact Test, and enrichment plots
+```
 
 ## Setup & Prerequisites
 
