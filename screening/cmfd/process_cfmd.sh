@@ -25,28 +25,22 @@ for DS in "${DATASETS[@]}"; do
     echo "==========================================="
 
     echo "### Downloading dataset's MAGs ###"
-    # 1. Descargar (Usando el script proporcionado)
     bash scripts/download_mags.sh "$DS"
 
     # Prokka
     echo "### Step 1: Running Prokka on MAGs ###"
-    # 1. Descomprimimos (igual que antes)
     bzip2 -d "${DS}_mags"/*.bz2 2>/dev/null
 
-    # 2. Bucle de predicción
     shopt -s nullglob
     for MAG in "${DS}_mags"/*.{fna,fa,fasta}; do
         
-        # Verificamos que el archivo tenga contenido
         [ -s "$MAG" ] || continue
 
-        # Sacamos el ID limpio para el nombre del archivo
         FULL_NAME=$(basename "$MAG")
         MAG_ID="${FULL_NAME%.*}"
 
         echo "### Running Prodigal on: $MAG_ID ###"
 
-        # 3. Lanzamos Prodigal (Sustituye a Prokka)
         # -i: entrada (nucleótidos)
         # -a: salida de proteínas (aminoácidos)
         # -p meta: optimizado para MAGs/fragmentos
@@ -56,7 +50,6 @@ for DS in "${DATASETS[@]}"; do
                  -p meta \
                  -q
 
-        # 4. Verificación simple
         if [ -f "$RESULTS_DIR/faa_all/${MAG_ID}.faa" ]; then
              echo "   [OK] Proteínas generadas."
         else
@@ -64,20 +57,16 @@ for DS in "${DATASETS[@]}"; do
         fi
     done
 
-    # 3. Clasificador HMM
+    # Clasificador HMM
     echo "### Running GAD Classifier ###"
-    # Concatenamos todas las proteínas del dataset para pasar el clasificador una sola vez
     cat "$RESULTS_DIR/faa_all"/*.faa > "${DS}_temp_all.faa"
     
     bash scripts/classifier.sh -m "$MODELS_DIR" -t "$THRESHOLDS" \
          -r "$RESULTS_DIR/hits/$DS" -s "${DS}_temp_all.faa"
 
-    # 4. Limpieza
     echo "### Cleaning up raw genomic data ###"
     rm -rf "${DS}_mags"
     rm "${DS}_temp_all.faa"
-    # Opcional: rm "$RESULTS_DIR/faa_all"/*.faa 
-    # (Si ya tienes los resultados de HMMer, no necesitas los .faa de 2GB)
 done
 
 echo "==========================================="
